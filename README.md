@@ -129,6 +129,15 @@ valid_metric: ndcg@10
 eval_batch_size: 1
 epochs: 1
 eval_step: 1
+....
+
+# evaluation config
+... see above
+
+
+# calibration config
+... see above
+
 ```
 
 ### 📍 Training
