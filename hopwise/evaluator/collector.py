@@ -1,0 +1,418 @@
+# @Time   : 2021/6/23
+# @Author : Zihan Lin
+# @Email  : zhlin@ruc.edu.cn
+
+# UPDATE
+# @Time   : 2021/7/18
+# @Author : Zhichao Feng
+# @email  : fzcbupt@gmail.com
+
+"""hopwise.evaluator.collector
+################################################
+"""
+
+import copy
+
+import torch
+
+from hopwise.evaluator.register import Register, Register_KG
+from hopwise.evaluator.utils import train_tsne
+
+
+class DataStruct:
+    def __init__(self):
+        self._data_dict = {}
+
+    def __getitem__(self, name: str):
+        return self._data_dict[name]
+
+    def __setitem__(self, name: str, value):
+        self._data_dict[name] = value
+
+    def __delitem__(self, name: str):
+        self._data_dict.pop(name)
+
+    def __contains__(self, key: str):
+        return key in self._data_dict
+
+    def get(self, name: str):
+        if name not in self._data_dict:
+            raise IndexError("Can not load the data without registration !")
+        return self[name]
+
+    def set(self, name: str, value):
+        self._data_dict[name] = value
+
+    def update_tensor(self, name: str, value):
+        if name not in self._data_dict:
+            if isinstance(value, torch.Tensor):
+                self._data_dict[name] = value.clone().detach()
+            else:
+                self._data_dict[name] = value
+        elif isinstance(self._data_dict[name], torch.Tensor):
+            self._data_dict[name] = torch.cat((self._data_dict[name], value.clone().detach()), dim=0)
+        else:
+            self._data_dict[name] = self._data_dict[name] + value
+
+    def __str__(self):
+        data_info = "\nContaining:\n"
+        for data_key in self._data_dict.keys():
+            data_info += data_key + "\n"
+        return data_info
+
+
+class Collector:
+    """The collector is used to collect the resource for evaluator.
+    As the evaluation metrics are various, the needed resource not only contain the recommended result
+    but also other resource from data and model. They all can be collected by the collector during the training
+    and evaluation process.
+
+    This class is only used in Trainer.
+
+    """
+
+    def __init__(self, config):
+        self.config = config
+        self.data_struct = DataStruct()
+        self.register = Register(config)
+        self.full = "full" in config["eval_args"]["mode"]
+        self.topk = self.config["topk"]
+        self.device = self.config["device"]
+
+    def train_data_collect(self, train_data):
+        """Collect the evaluation resource from training data.
+
+        Args:
+            train_data (AbstractDataLoader): the training dataloader which contains the training data.
+
+        """
+        if self.register.need("data.unwanted_items"):
+            self.data_struct.set("data.unwanted_items", self._build_unwanted_items_map(train_data.dataset))
+        if self.register.need("data.num_items"):
+            item_id = self.config["ITEM_ID_FIELD"]
+            self.data_struct.set("data.num_items", train_data.dataset.num(item_id))
+        if self.register.need("data.num_users"):
+            user_id = self.config["USER_ID_FIELD"]
+            self.data_struct.set("data.num_users", train_data.dataset.num(user_id))
+        if self.register.need("data.count_items"):
+            self.data_struct.set("data.count_items", train_data.dataset.item_counter)
+        if self.register.need("data.count_users"):
+            self.data_struct.set("data.count_users", train_data.dataset.user_counter)
+        if self.register.need("data.history_index"):
+            row = train_data.dataset.inter_feat[train_data.dataset.uid_field]
+            col = train_data.dataset.inter_feat[train_data.dataset.iid_field]
+            self.data_struct.set("data.history_index", torch.vstack([row, col]))
+        if self.register.need("data.timestamp"):
+            temporal_matrix = train_data.dataset.inter_matrix(value_field=train_data.dataset.time_field).toarray()
+            self.data_struct.set("data.timestamp", temporal_matrix)
+
+    def _build_unwanted_items_map(self, dataset):
+        """Build a dict of internal user id -> list(internal unwanted item ids)."""
+        unwanted_feat = getattr(dataset, "unwanted_feat", None)
+        if unwanted_feat is None:
+            raise ValueError(
+                "Metric requires `unwanted_feat` but it is missing. Set `additional_feat_suffix: unwanted` and load user/item columns."  # noqa: E501
+            )
+
+        uid_field = dataset.uid_field
+        iid_field = dataset.iid_field
+        if uid_field not in unwanted_feat or iid_field not in unwanted_feat:
+            raise ValueError(f"`unwanted_feat` must contain both [{uid_field}] and [{iid_field}] fields.")
+
+        users = unwanted_feat[uid_field]
+        items = unwanted_feat[iid_field]
+
+        if isinstance(users, torch.Tensor):
+            users = users.cpu().tolist()
+        else:
+            users = users.tolist()
+        if isinstance(items, torch.Tensor):
+            items = items.cpu().tolist()
+        else:
+            items = items.tolist()
+
+        unwanted_items = {}
+        for uid, iid in zip(users, items):
+            uid = int(uid)  # noqa: PLW2901
+            iid = int(iid)  # noqa: PLW2901
+            if uid not in unwanted_items:
+                unwanted_items[uid] = set()
+            unwanted_items[uid].add(iid)
+
+        return unwanted_items
+
+    def eval_data_collect(self, eval_data):
+        """Collect the evaluation resource from evaluation data, such as user and item features.
+
+        Args:
+            eval_data (AbstractDataLoader): the evaluation dataloader which contains the evaluation data.
+
+        """
+        if self.register.need("eval_data.user_feat"):
+            if not hasattr(eval_data.dataset, "user_feat") or eval_data.dataset.user_feat is None:
+                raise AttributeError("Evaluation data does not include user features.")
+            self.data_struct.set("eval_data.user_feat", eval_data.dataset.user_feat)
+
+    def _average_rank(self, scores):
+        """Get the ranking of an ordered tensor, and take the average of the ranking for positions with equal values.
+
+        Args:
+            scores(tensor): an ordered tensor, with size of `(N, )`
+
+        Returns:
+            torch.Tensor: average_rank
+
+        Example:
+            >>> average_rank(tensor([[1,2,2,2,3,3,6],[2,2,2,2,4,5,5]]))
+            tensor([[1.0000, 3.0000, 3.0000, 3.0000, 5.5000, 5.5000, 7.0000],
+            [2.5000, 2.5000, 2.5000, 2.5000, 5.0000, 6.5000, 6.5000]])
+
+        Reference:
+            https://github.com/scipy/scipy/blob/v0.17.1/scipy/stats/stats.py#L5262-L5352
+
+        """
+        length, width = scores.shape
+        true_tensor = torch.full((length, 1), True, dtype=torch.bool, device=self.device)
+
+        obs = torch.cat([true_tensor, scores[:, 1:] != scores[:, :-1]], dim=1)
+        # bias added to dense
+        bias = torch.arange(0, length, device=self.device).repeat(width).reshape(width, -1).transpose(1, 0).reshape(-1)
+        dense = obs.view(-1).cumsum(0) + bias
+
+        # cumulative counts of each unique value
+        count = torch.where(torch.cat([obs, true_tensor], dim=1))[1]
+        # get average rank
+        avg_rank = 0.5 * (count[dense] + count[dense - 1] + 1).view(length, -1)
+
+        return avg_rank
+
+    def eval_batch_collect(self, scores, interaction, positive_u: torch.Tensor, positive_i: torch.Tensor, **kwargs):
+        """Collect the evaluation resource from batched eval data and batched model output.
+
+        Args:
+            scores (Torch.Tensor): the output tensor of model with the shape of `(N, )`
+            interaction (Interaction): batched eval data.
+            positive_u (Torch.Tensor): the row index of positive items for each user.
+            positive_i (Torch.Tensor): the positive item id for each user.
+        """
+        if kwargs.get("threshold", None) is not None:
+            calibration_config = self.config["calibration"]
+            if calibration_config["calibrator"] in ["ConformalRiskControlTopMargin"]:
+                conformal_delta = kwargs["threshold"]
+
+                finite_scores = torch.isfinite(scores)
+
+                row_max = torch.where(finite_scores, scores, -torch.inf).max(dim=1, keepdim=True).values
+                keep_mask = scores >= (row_max - conformal_delta)
+
+                scores = scores.masked_fill(~keep_mask, float("-inf"))
+            else:
+                conformal_threshold = kwargs["threshold"]
+                mask = scores < conformal_threshold
+                scores = scores.masked_fill(mask, float("-inf"))
+
+        # if self.register.need("users.topk"):
+        #     # each user has a different topk size, and the topk size is stored in `users_topk`
+        #     users_variable_topk_size = kwargs.get("users_topk_size", False)
+        #     self.data_struct.update_tensor("users.topk", users_variable_topk_size)
+
+        if self.register.need("rec.users"):
+            uid_field = self.config["USER_ID_FIELD"]
+            self.data_struct.update_tensor("rec.users", interaction[uid_field])
+
+        if self.register.need("rec.items"):
+            _, topk_idx = torch.topk(scores, max(self.topk), dim=-1)  # n_users x k
+            self.data_struct.update_tensor("rec.items", topk_idx)
+
+        if self.register.need("rec.topk"):
+            _, topk_idx = torch.topk(scores, max(self.topk), dim=-1)  # n_users x k
+            pos_matrix = torch.zeros_like(scores, dtype=torch.int)
+            pos_matrix[positive_u, positive_i] = 1
+            pos_len_list = pos_matrix.sum(dim=1, keepdim=True)
+            pos_idx = torch.gather(pos_matrix, dim=1, index=topk_idx)
+            result = torch.cat((pos_idx, pos_len_list), dim=1)
+            self.data_struct.update_tensor("rec.topk", result)
+
+        if self.register.need("rec.topk.score"):
+            topk_scores, _ = torch.topk(scores, max(self.topk), dim=-1)  # n_users x k
+            self.data_struct.update_tensor("rec.topk.score", topk_scores)
+
+        if self.register.need("rec.meanrank"):
+            desc_scores, desc_index = torch.sort(scores, dim=-1, descending=True)
+
+            # get the index of positive items in the ranking list
+            pos_matrix = torch.zeros_like(scores)
+            pos_matrix[positive_u, positive_i] = 1
+            pos_index = torch.gather(pos_matrix, dim=1, index=desc_index)
+
+            avg_rank = self._average_rank(desc_scores)
+            pos_rank_sum = torch.where(pos_index == 1, avg_rank, torch.zeros_like(avg_rank)).sum(dim=-1, keepdim=True)
+
+            pos_len_list = pos_matrix.sum(dim=1, keepdim=True)
+            user_len_list = desc_scores.argmin(dim=1, keepdim=True)
+            result = torch.cat((pos_rank_sum, user_len_list, pos_len_list), dim=1)
+            self.data_struct.update_tensor("rec.meanrank", result)
+
+        if self.register.need("rec.score"):
+            self.data_struct.update_tensor("rec.score", scores)
+
+        if self.register.need("data.label"):
+            self.label_field = self.config["LABEL_FIELD"]
+            self.data_struct.update_tensor("data.label", interaction[self.label_field].to(self.device))
+
+    def filter_test_items(self, eval_data, scores):
+        # consider a case where only a subset of the items can be recommended.
+        # for example, in the test set that is over a time period, only a subset of items can be recommended
+        # to use this approach use benchmark_files and split the dataset accordingly
+
+        # mapping from dataset (raw) id to hopwise item id
+        raw_item_id2item_id = eval_data.dataset.field2token_id[eval_data.dataset.iid_field]
+
+        # allowed items during test period
+        items = {item.item() for item in eval_data.dataset.item_feat[eval_data.dataset.iid_field]}
+        eval_split = getattr(eval_data.dataset, f"item_feat_{eval_data.split}")
+        allowed_items = eval_split[eval_data.dataset.iid_field].to_numpy()
+        allowed_items = set(raw_item_id2item_id[item_id] for item_id in allowed_items)
+        items = list(items - allowed_items)
+
+        scores[:, items] = -torch.inf
+        return scores
+
+    def model_collect(self, model: torch.nn.Module, load_best_model=False):
+        """Collect the evaluation resource from model and do something with the model.
+
+        Args:
+            model (nn.Module): the trained recommendation model.
+            load_best_model (bool): whether to load the best model.
+        """
+
+        if self.config["tsne"] is not None:
+            # available only on some KGE methods
+            train_tsne(model, self.config["tsne"], load_best_model)
+
+    def eval_collect(self, eval_pred: torch.Tensor, data_label: torch.Tensor):
+        """Collect the evaluation resource from total output and label.
+        It was designed for those models that can not predict with batch.
+
+        Args:
+            eval_pred (torch.Tensor): the output score tensor of model.
+            data_label (torch.Tensor): the label tensor.
+        """
+        if self.register.need("rec.score"):
+            self.data_struct.update_tensor("rec.score", eval_pred)
+
+        if self.register.need("data.label"):
+            self.label_field = self.config["LABEL_FIELD"]
+            self.data_struct.update_tensor("data.label", data_label.to(self.device))
+
+    def get_data_struct(self):
+        """Get all the evaluation resource that been collected.
+        And reset some of outdated resource.
+        """
+        for key in self.data_struct._data_dict:
+            if isinstance(self.data_struct._data_dict[key], torch.Tensor):
+                self.data_struct._data_dict[key] = self.data_struct._data_dict[key].cpu()
+
+        returned_struct = copy.deepcopy(self.data_struct)
+        for key in [
+            "rec.topk",
+            "rec.topk.score",
+            "rec.meanrank",
+            "rec.score",
+            "rec.items",
+            "rec.users",
+            "data.label",
+            "rec.paths",
+            "rec.conformal.topk",
+            "rec.conformal.items",
+            "conformal.topk",
+            "users.topk",
+        ]:
+            if key in self.data_struct:
+                del self.data_struct[key]
+
+        returned_struct.set("topk", self.topk)
+
+        return returned_struct
+
+
+class Collector_KG(Collector):
+    """This collector is used to collect the resource for evaluator in knowledge graph embedding models.
+    Specifically, it collects the predictions for the link prediction task, extending Collector from recommendation.
+
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.register = Register_KG(config)
+        self.topk = self.config["topk_kg"]
+
+
+class ExplainableCollector(Collector):
+    """This collector is used to collect the resource for evaluator in explainable recommendation models.
+    It collects the KG paths and explanations for the recommendations made by the model and enables
+    path quality evaluation.
+
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.register = Register(config)
+
+    def train_data_collect(self, train_data):
+        super().train_data_collect(train_data)
+
+        if self.register.need("data.max_path_type"):
+            self.data_struct.set("data.max_path_type", torch.arange(train_data.dataset.relation_num))
+        if self.register.need("data.node_degree"):
+            self.data_struct.set("data.node_degree", self.node_degree_dict(train_data))
+        if self.register.need("data.max_path_length"):
+            if hasattr(train_data.dataset, "token_sequence_length"):
+                # PEARLM or KGGLM
+                sampled_path_len = train_data.dataset.token_sequence_length - 2
+                self.data_struct.set("data.max_path_length", sampled_path_len)
+            else:
+                # PGPR or CAFE
+                self.data_struct.set(
+                    "data.max_path_length", max([len(path) for path in self.config["path_constraint"]]) * 2 - 1
+                )
+
+        if self.register.need("data.rid2relation"):
+            self.data_struct.set("data.rid2relation", train_data.dataset.field2id_token["relation_id"])
+
+    def node_degree_dict(self, train_data):
+        # from pgpr knowledge graph
+        # https://github.com/giacoballoccu/rep-path-reasoning-recsys/blob/main/models/PGPR/knowledge_graph.py
+        aug_kg = train_data.dataset.ckg_dict_graph()
+        degrees = {}
+        for etype in aug_kg:
+            degrees[etype] = {}
+            for eid in aug_kg[etype]:
+                count = 0
+                for r in aug_kg[etype][eid]:
+                    count += len(aug_kg[etype][eid][r])
+                degrees[etype][eid] = count
+        return degrees
+
+    def eval_batch_collect(
+        self,
+        explanations,
+        interaction,
+        positive_u: torch.Tensor,
+        positive_i: torch.Tensor,
+    ):
+        """Collect the evaluation resource from batched eval data and batched model output.
+
+        Args:
+            explanations (tuple): a tuple containing the scores and paths, where:
+                - scores (Torch.Tensor): the output tensor of model with the shape of `(N, )`
+                - paths (list): a list of quadruples representing the paths for each user.
+            interaction (Interaction): batched eval data.
+            positive_u (Torch.Tensor): the row index of positive items for each user.
+            positive_i (Torch.Tensor): the positive item id for each user.
+        """
+        scores, paths = explanations
+        super().eval_batch_collect(scores, interaction, positive_u, positive_i)
+
+        if self.register.need("rec.paths"):
+            self.data_struct.update_tensor("rec.paths", paths)

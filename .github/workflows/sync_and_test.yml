@@ -1,0 +1,68 @@
+name: Sync with uv and test
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        required: true
+        type: string
+      python-version:
+        required: true
+        type: string
+      os:
+        required: true
+        type: string
+      experimental_or_skip_heavy_tests:
+        required: true
+        type: boolean
+
+jobs:
+  sync_and_test:
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          enable-cache: true
+
+      # Sync pipeline
+      - name: Install the project
+        run: |
+          uv sync
+
+      - if: ${{ inputs.env == 'cuda' }}
+        run: |
+          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
+      - if: ${{ inputs.env == 'cpu' }}
+        run: |
+          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cpu.html
+
+      # Testing pipeline
+      # TODO: add pytest-cov to generate coverage reports with Full Test
+      - name: Full Test
+        if: ${{ inputs.experimental_or_skip_heavy_tests == false && inputs.os == 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v -n auto tests
+      - name: Test Config
+        if: ${{ inputs.experimental_or_skip_heavy_tests != false || inputs.os != 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v -n auto tests/config/test_config.py
+      - name: Test metrics
+        if: ${{ inputs.experimental_or_skip_heavy_tests != false || inputs.os != 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v -n auto tests/metrics
+      - name: Test data
+        if: ${{ inputs.experimental_or_skip_heavy_tests != false || inputs.os != 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v -n auto tests/data
+      - name: Test evaluation_setting
+        if: ${{ inputs.experimental_or_skip_heavy_tests != false || inputs.os != 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v -n auto tests/evaluation_setting
+      - name: Test hyper_tuning
+        if: ${{ inputs.experimental_or_skip_heavy_tests != false || inputs.os != 'ubuntu-latest' }}
+        run: |
+          uv run -m pytest -v tests/hyper_tuning/test_hyper_tuning.py
