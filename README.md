@@ -1,5 +1,3 @@
-
-
 <h1 align="center">📊 Conformal hopwise</h1>
 <p align="center">
   <b>hopwise extension with conformal risk control.</b>
@@ -79,6 +77,8 @@ To test this use case, you can run:
 python -m hopwise --debug train --model BPR --dataset piki_music --config-files unwanted_example.yaml
 ```
 
+
+https://github.com/user-attachments/assets/25de9883-bc2c-472e-813f-1cd870afc27d
 
 
 *Note: as discussed in the paper, the unwanted-risk objective is not monotonic and is monotonized in practice for calibration (Section 5, Footnote 3).* 
