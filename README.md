@@ -57,8 +57,7 @@ This workflow is inspired by the unwanted-risk mitigation framework in https://d
 Create a `.unwanted` file (same schema as `.inter`) with interactions marked as unwanted. Users/items must also exist in `.inter`, or they are dropped.
 
 2. **📦 Use the datasets**
-You can use three preprocessed datasets with explicit negative feedback:
-- [KuaiRand](https://kuairand.com) `random policy`
+You can use two preprocessed datasets with explicit negative feedback:
 - [KuaiRand](https://kuairand.com) `standard policy`
 - Piki Music
 
@@ -68,7 +67,7 @@ Then place them in `hopwise/dataset_example` (where `ml-100k` and `piki_music` a
 1. **🎯 Choose the calibration loss**
 Set `calibration.loss` to a metric in `hopwise.evaluator.conformal_metrics` that matches the unwanted-risk objective you want to control.
 
-4. **📏 Train and report**
+1. **📏 Train and report**
 Train on `.inter`, calibrate with CRC, and report `UnwantedRecall` to measure unwanted items in top-k recommendations.
 
 To test this use case, you can run:

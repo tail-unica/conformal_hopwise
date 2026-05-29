@@ -47,6 +47,6 @@ calibration:
   loss: Unwanted # should the class name of the loss to use for calibration (e.g., Miscoverage, unwanted..) present in hopwise.evaluator.conformal.metrics.py
   
   # EXPECTATION CHECK
-  prove_expectation: True
+  prove_expectation: False
   n_calibration_users: 0.4 # the proportion of users to use for calibration (the rest will be used for testing)
   n_trials: 500 # to verify the expectation of the conformal risk control
