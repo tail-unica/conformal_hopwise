@@ -30,7 +30,8 @@ from scipy.sparse import coo_matrix, diags, dok_matrix
 from hopwise.data.interaction import Interaction
 from hopwise.utils import FeatureSource, FeatureType, ensure_dir, set_color
 from hopwise.utils.enum_type import DatasetSets, ModelType
-from hopwise.utils.url import decide_download, download_url, extract_zip, makedirs, rename_atomic_files
+from hopwise.utils.url import (decide_download, download_url, extract_zip,
+                               makedirs, rename_atomic_files)
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -1459,26 +1460,54 @@ class Dataset(torch.utils.data.Dataset):
     def __repr__(self):
         return self.__str__()
 
-    def __str__(self):
-        info = [set_color(self.dataset_name, "magenta")]
+    def _avg_actions_of_feat(self, feat, field):
+        if isinstance(feat, pd.DataFrame):
+            return np.mean(feat.groupby(field).size())
+        return np.mean(list(Counter(feat[field].numpy()).values()))
+
+    def _num_of_feat(self, feat, field):
+        if isinstance(feat, pd.DataFrame):
+            return feat[field].nunique()
+        return len(np.unique(feat[field].numpy()))
+
+    def _sparsity_of_feat(self, feat):
+        user_num = self._num_of_feat(feat, self.uid_field)
+        item_num = self._num_of_feat(feat, self.iid_field)
+        return 1 - len(feat) / user_num / item_num
+
+    def _format_dataset_info(self, feat, feat_name=None, title_color="magenta"):
+        info = [set_color(self.dataset_name, title_color)]
+        if feat_name is not None:
+            info[0] += set_color(f" [{feat_name}]", title_color)
         if self.uid_field:
+            user_num = self._num_of_feat(feat, self.uid_field)
             info.extend(
                 [
-                    set_color("The number of users", "blue") + f": {self.user_num}",
-                    set_color("Average actions of users", "blue") + f": {self.avg_actions_of_users}",
+                    set_color("The number of users", "blue") + f": {user_num}",
+                    set_color("Average actions of users", "blue")
+                    + f": {self._avg_actions_of_feat(feat, self.uid_field)}",
                 ]
             )
         if self.iid_field:
+            item_num = self._num_of_feat(feat, self.iid_field)
             info.extend(
                 [
-                    set_color("The number of items", "blue") + f": {self.item_num}",
-                    set_color("Average actions of items", "blue") + f": {self.avg_actions_of_items}",
+                    set_color("The number of items", "blue") + f": {item_num}",
+                    set_color("Average actions of items", "blue")
+                    + f": {self._avg_actions_of_feat(feat, self.iid_field)}",
                 ]
             )
-        info.append(set_color("The number of inters", "blue") + f": {self.inter_num}")
+        info.append(set_color("The number of inters", "blue") + f": {len(feat)}")
         if self.uid_field and self.iid_field:
-            info.append(set_color("The sparsity of the dataset", "blue") + f": {self.sparsity * 100}%")
+            info.append(set_color("The sparsity of the dataset", "blue") + f": {self._sparsity_of_feat(feat) * 100}%")
         info.append(set_color("Remain Fields", "blue") + f": {list(self.field2type)}")
+        return "\n".join(info)
+
+    def __str__(self):
+        info = [f'\n{self._format_dataset_info(self.inter_feat, "inter_feat", title_color="green")}']
+        summary_feat = getattr(self, "unwanted_feat", None)
+        if summary_feat is not None:
+            info.append(self._format_dataset_info(summary_feat, "unwanted_feat", title_color="cyan"))
         return "\n".join(info)
 
     def copy(self, new_inter_feat):
