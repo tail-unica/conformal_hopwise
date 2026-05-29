@@ -55,7 +55,7 @@ ENV/
 
 # Data files
 *.csv
-*.tsv
+#*.tsv
 *.json
 *.jsonl
 *.parquet
@@ -118,3 +118,7 @@ docs/_build/
 docs/build/
 
 
+kuairand_random/
+kuairand_standard/
+metrics/
+CIKM2026/

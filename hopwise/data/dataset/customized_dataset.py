@@ -730,8 +730,6 @@ class RPGDataset(SequentialDataset):
         """
         import faiss
 
-        breakpoint()
-
         #  Load sentence transformer embeddings
         embeddings = np.vstack(self.itememb_feat["item_embedding"].to_numpy())
 

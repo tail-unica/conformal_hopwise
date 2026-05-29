@@ -599,8 +599,6 @@ class Trainer(AbstractTrainer):
                     positive_u_list.append(positive_u + row_offset)
                     positive_i_list.append(positive_i)
                     row_offset += scores.size(0)
-                else:
-                    self.eval_collector.eval_batch_collect(scores, interaction, positive_u, positive_i, **kwargs)
             else:
                 self.eval_collector.eval_batch_collect(scores, interaction, positive_u, positive_i)
 
@@ -615,7 +613,7 @@ class Trainer(AbstractTrainer):
             all_scores = torch.cat(conformal_scores, dim=0)
             all_positive_u = torch.cat(positive_u_list, dim=0)
             all_positive_i = torch.cat(positive_i_list, dim=0)
-            return result, all_scores, all_positive_u, all_positive_i
+            return result, all_scores, all_positive_u, all_positive_i, struct
 
         return result
 
@@ -947,7 +945,7 @@ class KGTrainer(Trainer):
                 if saved:
                     self._save_checkpoint(epoch_idx, verbose=verbose)
                 continue
-
+            
             if (epoch_idx + 1) % self.eval_step == 0:
                 valid_start_time = time()
                 return_data = self._valid_epoch(valid_data, show_progress=show_progress)

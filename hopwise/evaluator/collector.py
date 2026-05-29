@@ -118,28 +118,35 @@ class Collector:
         iid_field = dataset.iid_field
         if uid_field not in unwanted_feat or iid_field not in unwanted_feat:
             raise ValueError(f"`unwanted_feat` must contain both [{uid_field}] and [{iid_field}] fields.")
-
+        
         users = unwanted_feat[uid_field]
         items = unwanted_feat[iid_field]
 
-        if isinstance(users, torch.Tensor):
-            users = users.cpu().tolist()
-        else:
-            users = users.tolist()
-        if isinstance(items, torch.Tensor):
-            items = items.cpu().tolist()
-        else:
-            items = items.tolist()
+        # if isinstance(users, torch.Tensor):
+        #     users = users.cpu().tolist()
+        # else:
+        #     users = users.tolist()
+        # if isinstance(items, torch.Tensor):
+        #     items = items.cpu().tolist()
+        # else:
+        #     items = items.tolist()
 
-        unwanted_items = {}
+        # unwanted_items = {}
+        # for uid, iid in zip(users, items):
+        #     uid = int(uid)  # noqa: PLW2901
+        #     iid = int(iid)  # noqa: PLW2901
+        #     if uid not in unwanted_items:
+        #         unwanted_items[uid] = set()
+        #     unwanted_items[uid].add(iid)
+
+    
+        unwanted_items_matrix = torch.zeros((dataset.user_num, dataset.item_num), dtype=torch.bool)
         for uid, iid in zip(users, items):
             uid = int(uid)  # noqa: PLW2901
             iid = int(iid)  # noqa: PLW2901
-            if uid not in unwanted_items:
-                unwanted_items[uid] = set()
-            unwanted_items[uid].add(iid)
+            unwanted_items_matrix[uid][iid] = True
 
-        return unwanted_items
+        return unwanted_items_matrix
 
     def eval_data_collect(self, eval_data):
         """Collect the evaluation resource from evaluation data, such as user and item features.
@@ -196,30 +203,14 @@ class Collector:
             positive_i (Torch.Tensor): the positive item id for each user.
         """
         if kwargs.get("threshold", None) is not None:
-            calibration_config = self.config["calibration"]
-            if calibration_config["calibrator"] in ["ConformalRiskControlTopMargin"]:
-                conformal_delta = kwargs["threshold"]
-
-                finite_scores = torch.isfinite(scores)
-
-                row_max = torch.where(finite_scores, scores, -torch.inf).max(dim=1, keepdim=True).values
-                keep_mask = scores >= (row_max - conformal_delta)
-
-                scores = scores.masked_fill(~keep_mask, float("-inf"))
-            else:
-                conformal_threshold = kwargs["threshold"]
-                mask = scores < conformal_threshold
-                scores = scores.masked_fill(mask, float("-inf"))
-
-        # if self.register.need("users.topk"):
-        #     # each user has a different topk size, and the topk size is stored in `users_topk`
-        #     users_variable_topk_size = kwargs.get("users_topk_size", False)
-        #     self.data_struct.update_tensor("users.topk", users_variable_topk_size)
+            conformal_threshold = kwargs["threshold"]
+            mask = scores < conformal_threshold
+            scores = scores.masked_fill(mask, float("-inf"))
 
         if self.register.need("rec.users"):
             uid_field = self.config["USER_ID_FIELD"]
             self.data_struct.update_tensor("rec.users", interaction[uid_field])
-
+            
         if self.register.need("rec.items"):
             _, topk_idx = torch.topk(scores, max(self.topk), dim=-1)  # n_users x k
             self.data_struct.update_tensor("rec.items", topk_idx)

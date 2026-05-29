@@ -376,6 +376,12 @@ class Config:
         eval_type = set()
         for metric in self.final_config_dict["metrics"]:
             if metric.lower() in metric_types:
+                if metric.lower() in ['unwantedrecall']:
+                    if 'unwanted' not in self.final_config_dict['load_col'].keys():
+                        raise ValueError("unwantedrecall metric requires 'unwanted' column in the dataset, please check your dataset and config.")
+                    
+                    logger = getLogger()
+                    logger.info("unwantedrecall is calculated by aggregating only users with negative explicit feedback. Other users do not contribute to the average.")
                 eval_type.add(metric_types[metric.lower()])
             else:
                 raise NotImplementedError(f"There is no metric named '{metric}'")

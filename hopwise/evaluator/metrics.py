@@ -208,23 +208,18 @@ class UnwantedRecall(AbstractMetric):
         return self.topk_result("unwantedrecall", result)
 
     def metric_info(self, rec_items, users, unwanted_items):
-        n_users, max_k = rec_items.shape
-        result = np.zeros((n_users, max_k), dtype=np.float64)
-        for row_idx, uid in enumerate(users):
-            uid = int(uid)  # noqa: PLW2901
-            user_unwanted = unwanted_items.get(uid, [])
-            if not user_unwanted:
-                continue
-
-            user_unwanted_set = set(user_unwanted)
-            denom = len(user_unwanted_set)
-            recommended_set = set()
-            for k_idx, iid in enumerate(rec_items[row_idx]):
-                recommended_set.add(int(iid))
-                hits = len(recommended_set & user_unwanted_set)
-                result[row_idx, k_idx] = hits / denom
-
-        return result
+        unwanted_items = np.array(unwanted_items[1:]) # skip padding
+        is_unwanted_rec = np.take_along_axis(unwanted_items, rec_items, axis=1)    
+        count_unwanted = is_unwanted_rec.cumsum(axis=1)
+        denom = unwanted_items.sum(axis=1).reshape(-1, 1)
+        
+        # avoid division by zero.
+        # unwanted recall is calculated only on users with unwanted items.
+        users_with_neg_feedback = np.where(unwanted_items.sum(1)!=0, True, False)
+        
+        count_unwanted = count_unwanted[users_with_neg_feedback]
+        denom = denom[users_with_neg_feedback]
+        return count_unwanted / denom
 
     def topk_result(self, metric, value):
         metric_dict = {}
@@ -606,42 +601,6 @@ class cp_max_inefficiency(TopkMetric):
             max_value = max_user_result.values[k - 1].item()
             count = (value[:, k - 1] == max_value).sum().item()
             metric_dict[key] = (round(max_value, self.decimal_place), f"#{count}")
-        return metric_dict
-
-
-class cp_user_topk_collapse(TopkMetric):
-    r"""Percentage of users with top-k size less or equal to the k.
-
-    .. math::
-        \mathrm{cp_collapse} = \frac{1}{|U|} \sum_{u \in U} |\{ i : |c_{u}|<k\}|
-    """
-
-    metric_need = ["rec.topk.score"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-    def calculate_metric(self, dataobject):
-        scores = dataobject.get("rec.topk.score")
-        per_user_topk_size = torch.isfinite(scores).cumsum(1).to(torch.float32)
-        return self.topk_result("cp_user_topk_collapse", per_user_topk_size)
-
-    def topk_result(self, metric, value):
-        """Match the metric value to the `k` and put them in `dictionary` form.
-
-        Args:
-            metric(str): the name of calculated metric.
-            value(numpy.ndarray): metrics for each user, including values from `metric@1` to `metric@max(self.topk)`.
-
-        Returns:
-            dict: metric values required in the configuration.
-        """
-        metric_dict = {}
-        for k in self.topk:
-            key = f"{metric}@{k}"
-            user_topk_size = value[:, k - 1]
-            percentage = (user_topk_size < k).sum().item() / value.shape[0]
-            metric_dict[key] = round(percentage, self.decimal_place)
         return metric_dict
 
 

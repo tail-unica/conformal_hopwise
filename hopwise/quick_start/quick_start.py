@@ -163,19 +163,23 @@ def run_hopwise(
         if config["show_split_data"] is not None:
             logger.info(train_data)
 
-            if config["show_split_data"] in ["valid_and_test", "valid_only"]:
-                if isinstance(valid_data, list):
-                    for split in valid_data:
-                        logger.info(split)
-                else:
-                    logger.info(valid_data)
+            if config["show_split_data"] == 'all':
+                show_split_info(valid_data, logger)
 
-            if config["show_split_data"] in ["valid_and_test", "test_only"]:
-                if isinstance(test_data, list):
-                    for split in test_data:
-                        logger.info(split)
-                else:
-                    logger.info(test_data)
+                if calib_data is not None:
+                    show_split_info(calib_data, logger)
+                
+                show_split_info(test_data, logger)
+
+            elif config["show_split_data"] == 'valid_only':
+                show_split_info(valid_data, logger)
+            
+            elif config["show_split_data"] == 'calib_only':
+                show_split_info(calib_data, logger)
+            
+            elif config["show_split_data"] == 'test_only':
+                show_split_info(test_data, logger)
+                                             
 
         # model loading and initialization
         init_seed(config["seed"] + config["local_rank"], config["reproducibility"])
@@ -216,9 +220,11 @@ def run_hopwise(
 
     show_results(logger, best_valid_result, prefix="Best validation set")
 
+   
     if calibrate_model:
         # model evaluation
-        test_result, _, _, _ = trainer.evaluate(
+        logger.info(set_color(f"Running evaluation on test set", "green"))
+        test_result, _, _, _, _ = trainer.evaluate(
             test_data,
             load_best_model=saved and run != "evaluate",
             model_file=checkpoint,
@@ -286,6 +292,12 @@ def run_hopwise(
 
     return result  # for the single process
 
+def show_split_info(data, logger):
+    if isinstance(data, list):
+        for split in data:
+            logger.info(split)
+    else:
+        logger.info(data)
 
 def show_results(logger, result, prefix="test"):
     if result is not None:
@@ -516,6 +528,9 @@ def load_minimal_data_and_model(model_file, load_only_data=False, updating_confi
     checkpoint = torch.load(model_file, weights_only=False)
     config = checkpoint["config"]
 
+    if updating_config is not None:
+        deep_dict_update(config.final_config_dict, updating_config.final_config_dict)
+        
     config["show_progress"] = False
 
     init_seed(config["seed"], config["reproducibility"])

@@ -8,8 +8,6 @@
   <img src="https://img.shields.io/badge/Python-3.9%7C3.10%7C3.11-green" />
   <img src="https://img.shields.io/github/license/tail-unica/hopwise" />
   <img src="https://img.shields.io/github/repo-size/tail-unica/hopwise">
-  <a href="https://github.com/tail-unica/hopwise/network"><img alt="GitHub forks" src="https://img.shields.io/github/forks/tail-unica/hopwise"></a>
-<a href="https://github.com/tail-unica/hopwise/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/tail-unica/hopwise"></a>
 </p>
 
 
@@ -17,7 +15,7 @@
 
 ## Overview
 
-**Conformal hopwise** is an advanced extension of the hopwise recommendation framework that supports conformal risk control calibration on top of any recommender system.
+**Conformal hopwise** provides tools to facilitate and foster the development of calibrated recommender systems using Conformal Risk Control (CRC), on top of hopwise.
 
 By defining a metric that is a proxy for a calibration objective, via a simple evaluation argument in the YAML file, it is possible to create calibrated recommender systems using conformal risk control.
 
@@ -34,10 +32,10 @@ eval_args:
 # Calibration Arguments
 calibration:
     calibrator: ConformalRiskControl # name of the conformal calibrator to use for calibration (e.g., ConformalRiskControl, etc) present in hopwise.model.conformal_calibration.py
-    alpha: 0.60 # 1 - confidence level (e.g., 0.60 in case of FNR means we want to ensure that is guaranteed that in expectation across users, the recall is 40%)
+    alpha: 0.20 # 1 - confidence level (e.g., 0.60 in case of FNR means we want to ensure that is guaranteed that in expectation across users, the recall is 40%)
     maximum_metric_score: 1.0 # maximum possible value of the metric (e.g., 1.0 for novelty, 1 for recall, etc..)
     n_lambdas: 3000 # the number of decision thresholds to consider when calibrating the model (e.g., 50000 means we will consider 50000 different lambda thresholds)
-    loss: FNR # the class name of the loss to use for calibration (e.g., FNR, FPR, etc..) present in hopwise.evaluator.conformal.metrics.py that is a proxy for the guarantees we are interested in achieving
+    loss: Miscoverage # the class name of the loss to use for calibration (e.g., Miscoverage, Unwanted, etc..) present in hopwise.evaluator.conformal.metrics.py that is a proxy for the guarantees we are interested in achieving
 
     # EXPECTATION CHECK
     prove_expectation: False
@@ -46,9 +44,60 @@ calibration:
 ```
 
 **Requirements**
-1. The chosen model should implement a `full_sort_predict()` function. For example, hopwise.model.general_recommender.bpr already has it.
+1. The chosen model should implement `full_sort_predict()` (e.g., hopwise.model.general_recommender.bpr).
 2. The evaluation should be set to leave-one-out, as shown above.
 3. The calibration arguments should be set.
+
+This extension adds `hopwise.evaluator.conformal_metrics` to provide the calibration losses used in conformal risk control, and `hopwise.model.conformal_calibration` where you can specify different calibration types using Conformal Prediction (CP), as well as the evaluation logic needed for calibration. We currently implement conformal risk control, but future work could include RCPS (https://arxiv.org/abs/2101.02703) or LTT (https://arxiv.org/abs/2110.01052), or dedicated classes for problem-specific methods such as group conformal prediction to calibrate by groups (for example, to control consumer fairness).
+
+
+### 🚀 Mitigating Unwanted Recommendations
+Control unwanted-item exposure with Conformal Risk Control (CRC) in a few steps.
+This workflow is inspired by the unwanted-risk mitigation framework in https://dl.acm.org/doi/10.1145/3705328.3748054, *"You Don't Bring Me Flowers: Mitigating Unwanted Recommendations Through Conformal Risk Control"🏆*.
+
+1. **🧾 Add unwanted feedback**
+Create a `.unwanted` file (same schema as `.inter`) with interactions marked as unwanted. Users/items must also exist in `.inter`, or they are dropped.
+
+2. **📦 Use the datasets**
+You can use three preprocessed datasets with explicit negative feedback:
+- [KuaiRand](https://kuairand.com) `random policy`
+- [KuaiRand](https://kuairand.com) `standard policy`
+- Piki Music
+
+Download the [KuaiRand](https://kuairand.com) datasets preprocessed for hopwise here: https://shorturl.at/ay60n  
+Then place them in `hopwise/dataset_example` (where `ml-100k` and `piki_music` are already present).
+
+1. **🎯 Choose the calibration loss**
+Set `calibration.loss` to a metric in `hopwise.evaluator.conformal_metrics` that matches the unwanted-risk objective you want to control.
+
+4. **📏 Train and report**
+Train on `.inter`, calibrate with CRC, and report `UnwantedRecall` to measure unwanted items in top-k recommendations.
+
+To test this use case, you can run:
+
+```sh
+python -m hopwise --debug train --model BPR --dataset piki_music --config-files unwanted_example.yaml
+```
+
+
+
+*Note: as discussed in the paper, the unwanted-risk objective is not monotonic and is monotonized in practice for calibration (Section 5, Footnote 3).* 
+
+
+### YAML Example
+```yaml
+data_path: hopwise/dataset_example
+metrics: ['NDCG', 'Recall', 'Precision', 'UnwantedRecall']
+
+calibration:
+    calibrator: ConformalRiskControl
+    alpha: 0.05 
+    maximum_metric_score: 1.0
+    n_lambdas: 3000
+    loss: Unwanted
+```
+
+
 
 ---
 
@@ -196,12 +245,13 @@ hopwise tune \
     --study-name STUDY_NAME
 ```
 
+
 ## ℹ️ Contributing
 Please let us know if you encounter a bug or have any suggestions by filing an issue.
 
 We welcome all contributions from bug fixes to new features and extensions. 🚀
 
-We expect all contributions discussed in the issue tracker and going through PRs. 📌
+We expect all contributions discussed in the issue tracker and going through PRs. 
 
 ## 📜 Cite
 If you find **hopwise** useful for your research or development, please cite with:
@@ -219,4 +269,3 @@ the paper is under revision
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.
-
